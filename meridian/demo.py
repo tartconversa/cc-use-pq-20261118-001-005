@@ -63,6 +63,57 @@ def scenario():
         return result
 
 
+def topic_decision(external_id, reviewer, topic, stance="positive", audience="general", revision=1):
+    return {"decision_id": f"{external_id}-r{revision}-{reviewer}-{topic}",
+            "origin": "local-fixture", "external_id": external_id, "revision": revision,
+            "reviewer": reviewer, "topic": topic, "stance": stance, "audience": audience,
+            "reason": f"Synthetic {topic} judgment based on supplied fixture"}
+
+
+def multi_topic_scenario():
+    """同一故事同时贡献科技与文化议题，文化议题分议题争议与裁定。"""
+    with tempfile.TemporaryDirectory() as directory:
+        path = str(Path(directory) / "multi.sqlite3")
+        service = MeridianService(path)
+        service.sources.register(source("s1", "North", "Outlet A"))
+        service.sources.register(source("s2", "North", "Outlet B"))
+        # 同故事两条来源：s1 覆盖科技+文化，s2 转载只覆盖科技。
+        service.observations.ingest(observation("a", "s1", "story-1"))
+        service.observations.ingest(observation("b", "s2", "story-1"))
+        for external_id in ("a", "b"):
+            service.coding.submit(topic_decision(external_id, "reviewer-a", "technology"))
+            service.coding.submit(topic_decision(external_id, "reviewer-b", "technology"))
+        # 文化议题只有 s1 编码，且两名审核员分歧。
+        service.coding.submit(topic_decision("a", "reviewer-a", "culture", "positive"))
+        service.coding.submit(topic_decision("a", "reviewer-b", "culture", "negative"))
+        disputed = service.analytics.report(query())
+        assert disputed["unique_story_count"] == 1
+        # 科技贡献行只有 1 行但含 2 个来源观察；文化未确认，不产生贡献行。
+        assert disputed["topic_contribution_count"] == 1
+        assert disputed["stories"][0]["observation_count"] == 2
+        assert disputed["pending_topic_count"] == 1
+        # 第三人只裁定文化议题；科技共识不受影响。
+        service.coding.adjudicate({"origin": "local-fixture", "external_id": "a", "revision": 1,
+                                   "adjudicator": "reviewer-c", "topic": "culture",
+                                   "stance": "mixed", "audience": "general",
+                                   "reason": "Culture coverage genuinely split"})
+        report = service.analytics.report(query())
+        assert report["unique_story_count"] == 1
+        assert report["topic_contribution_count"] == 2
+        assert report["multi_topic_story_share"] == 1.0
+        preview = service.releases.preview(query())
+        assert preview["quality"]["passed"]
+        release = service.releases.publish("multi-topic", query(), preview["token"])
+        bundle = service.exports.frozen("multi-topic")
+        assert service.exports.verify(bundle)["valid"]
+        result = {"unique_stories": release["report"]["unique_story_count"],
+                  "topic_contributions": release["report"]["topic_contribution_count"],
+                  "multi_topic_share": release["report"]["multi_topic_story_share"]}
+        service.close()
+        return result
+
+
 if __name__ == "__main__":
     print(json.dumps(scenario(), ensure_ascii=False, sort_keys=True))
+    print(json.dumps(multi_topic_scenario(), ensure_ascii=False, sort_keys=True))
 

@@ -68,13 +68,16 @@ class ProvenanceExplorer:
         require(rows, "source_outside_query", "source has no observations in query")
         categories = Counter(self.analytics._classify(row, spec) for row in rows)
         stories = defaultdict(list)
+        topic_units = 0
         for row in rows:
-            if self.analytics._classify(row, spec) != "eligible":
+            units = self.analytics._topic_units(row, spec)
+            if not units:
                 continue
             data = row["item"]["data"]
-            coding = row["state"]["coding"]
-            key = (row["source"]["region"], data["story_key"], coding["topic"], coding["audience"])
-            stories[key].append(data["external_id"])
+            topic_units += len(units)
+            for unit in units:
+                key = (row["source"]["region"], data["story_key"], unit["topic"], unit["audience"])
+                stories[key].append(data["external_id"])
         report = self.analytics.report(spec)
         index = self._story_index(report)
         story_items = []
@@ -83,19 +86,32 @@ class ProvenanceExplorer:
             story_items.append({"key": self._story_key(key), "source_external_ids": sorted(ids),
                                 "combined_observation_count": combined["observation_count"] if combined else None,
                                 "combined_stance": combined["stance"] if combined else None})
+        unique_stories = {key[:2] for key in stories}
         return {"source_id": source_id, "query_hash": report["query_hash"],
                 "event_head": report["event_head"], "observation_count": len(rows),
-                "categories": dict(sorted(categories.items())), "stories": story_items}
+                "categories": dict(sorted(categories.items())),
+                "unique_story_count": len(unique_stories),
+                "topic_contribution_count": topic_units,
+                "stories": story_items}
 
     def coding_lineage(self, origin, external_id):
         item = self.observations.describe(origin, external_id)
         decisions = self.coding.decisions_for(origin, external_id, item["revision"])
         status = self.coding.status(origin, external_id, item["revision"])
-        key = f"{origin}/{external_id}/{item['revision']}"
-        ruling = self.store.one("SELECT * FROM adjudications WHERE case_key=?", (key,))
-        return {"origin": origin, "external_id": external_id, "revision": item["revision"],
-                "observation_hash": item["hash"], "status": status["status"],
-                "decisions": decisions, "adjudication":
-                {field: ruling[field] for field in ("adjudicator", "topic", "stance", "audience",
-                                                   "reason", "event_no")} if ruling else None}
+        adjudications = []
+        for entry in status["topics"].values():
+            if "case_key" not in entry:
+                continue
+            ruling = self.store.one("SELECT * FROM adjudications WHERE case_key=?", (entry["case_key"],))
+            adjudications.append({field: ruling[field] for field in
+                                  ("case_key", "adjudicator", "topic", "stance", "audience",
+                                   "reason", "event_no")})
+        result = {"origin": origin, "external_id": external_id, "revision": item["revision"],
+                  "observation_hash": item["hash"], "status": status["status"],
+                  "decisions": decisions, "topics": status["topics"],
+                  "confirmed_topics": status["confirmed_topics"],
+                  "pending_topics": status["pending_topics"],
+                  "adjudications": adjudications,
+                  "adjudication": adjudications[0] if len(adjudications) == 1 else None}
+        return result
 

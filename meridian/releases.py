@@ -70,6 +70,10 @@ class ReleaseShelf:
                 "same_result": previous["stories"] == current["stories"] and
                                previous["excluded"] == current["excluded"],
                 "story_count_delta": current["story_count"] - previous["story_count"],
+                "topic_contribution_delta": current["topic_contribution_count"]
+                - previous.get("topic_contribution_count", len(previous["stories"])),
+                "multi_topic_share_before": previous.get("multi_topic_story_share", 0.0),
+                "multi_topic_share_after": current["multi_topic_story_share"],
                 "excluded_delta": {key: current["excluded"].get(key, 0) - previous["excluded"].get(key, 0)
                                    for key in sorted(set(current["excluded"]) | set(previous["excluded"]))}}
 

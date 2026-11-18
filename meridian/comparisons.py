@@ -41,7 +41,12 @@ class ComparisonEngine:
                                     "share_delta": round(new_share - old_share, 6)
                                     if old_share is not None and new_share is not None else None}
             rows.append({"region": region, "left_stories": old_count, "right_stories": new_count,
-                         "story_delta": new_count - old_count, "stances": stances})
+                         "story_delta": new_count - old_count,
+                         "left_topic_contributions": previous.get("topic_contribution_count", 0),
+                         "right_topic_contributions": current.get("topic_contribution_count", 0),
+                         "left_multi_topic_story_share": previous.get("multi_topic_story_share", 0.0),
+                         "right_multi_topic_story_share": current.get("multi_topic_story_share", 0.0),
+                         "stances": stances})
         return {"left_query_hash": left["query_hash"], "right_query_hash": right["query_hash"],
                 "left_head": left["event_head"], "right_head": right["event_head"],
                 "left_excluded": left["excluded"], "right_excluded": right["excluded"],
@@ -61,28 +66,42 @@ class ComparisonEngine:
         right = regions[right_region]
         stances = {}
         for stance in sorted(set(left["stance_counts"]) | set(right["stance_counts"])):
-            left_share = left["stance_counts"].get(stance, 0) / left["story_count"]
-            right_share = right["stance_counts"].get(stance, 0) / right["story_count"]
+            left_share = left["stance_counts"].get(stance, 0) / left["topic_contribution_count"]
+            right_share = right["stance_counts"].get(stance, 0) / right["topic_contribution_count"]
             stances[stance] = {"left_share": round(left_share, 6),
                                 "right_share": round(right_share, 6),
-                                "difference": round(right_share - left_share, 6)}
+                                "difference": round(right_share - left_share, 6),
+                                "denominator": "topic_contribution"}
         return {"query_hash": report["query_hash"], "event_head": report["event_head"],
-                "left": left, "right": right, "stances": stances, "excluded": report["excluded"]}
+                "left": left, "right": right, "stances": stances, "excluded": report["excluded"],
+                "denominator_note": "stance shares use topic-contribution denominator; "
+                                    "story counts use unique-story denominator"}
 
     def topic_matrix(self, query):
         report = self.analytics.report(query)
-        matrix = defaultdict(lambda: defaultdict(lambda: {"stories": 0, "stances": defaultdict(int)}))
+        matrix = defaultdict(lambda: defaultdict(lambda: {"stories": set(), "stances": defaultdict(int)}))
         for story in report["stories"]:
             cell = matrix[story["region"]][story["topic"]]
-            cell["stories"] += 1
+            cell["stories"].add(story["story_key"])
             cell["stances"][story["stance"]] += 1
         rows = []
         for region, topics in sorted(matrix.items()):
             for topic, cell in sorted(topics.items()):
-                rows.append({"region": region, "topic": topic, "story_count": cell["stories"],
+                rows.append({"region": region, "topic": topic,
+                             "story_count": len(cell["stories"]),
+                             "topic_contribution_count": sum(cell["stances"].values()),
                              "stance_counts": dict(sorted(cell["stances"].items()))})
-        require(sum(row["story_count"] for row in rows) == report["story_count"], "matrix_mismatch",
-                "topic matrix does not reconcile to report")
+        # 议题级分母：各议题格的贡献数之和必须等于报告的议题贡献总数；
+        # 故事级分母：跨议题去重后的唯一故事数必须等于报告的唯一故事数。
+        require(sum(row["topic_contribution_count"] for row in rows)
+                == report["topic_contribution_count"], "matrix_mismatch",
+                "topic matrix does not reconcile to report contributions")
+        unique = {story["region"] + "|" + story["story_key"] for story in report["stories"]}
+        require(len(unique) == report["story_count"], "matrix_mismatch",
+                "topic matrix does not reconcile to unique stories")
         return {"query_hash": report["query_hash"], "event_head": report["event_head"],
-                "total_stories": report["story_count"], "rows": rows}
+                "total_stories": report["story_count"],
+                "topic_contribution_count": report["topic_contribution_count"],
+                "multi_topic_story_share": report["multi_topic_story_share"],
+                "rows": rows}
 

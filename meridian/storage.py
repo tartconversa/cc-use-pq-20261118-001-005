@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS decisions (
   revision INTEGER NOT NULL, reviewer TEXT NOT NULL, topic TEXT NOT NULL,
   stance TEXT NOT NULL, audience TEXT NOT NULL, reason TEXT NOT NULL,
   created_at TEXT NOT NULL, event_no INTEGER NOT NULL,
-  UNIQUE(origin, external_id, revision, reviewer),
+  UNIQUE(origin, external_id, revision, reviewer, topic),
   FOREIGN KEY(origin, external_id, revision)
     REFERENCES observations(origin, external_id, revision)
 );
@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS adjudications (
   revision INTEGER NOT NULL, adjudicator TEXT NOT NULL, topic TEXT NOT NULL,
   stance TEXT NOT NULL, audience TEXT NOT NULL, reason TEXT NOT NULL,
   decision_heads TEXT NOT NULL, created_at TEXT NOT NULL, event_no INTEGER NOT NULL,
+  UNIQUE(origin, external_id, revision, topic),
   FOREIGN KEY(origin, external_id, revision)
     REFERENCES observations(origin, external_id, revision)
 );

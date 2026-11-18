@@ -40,10 +40,25 @@ class IntegrityAudit:
             report = decode(row["report_json"])
             if report["query_hash"] != row["query_hash"] or report["event_head"] != row["event_head"]:
                 issues.append({"kind": "release_metadata", "release_id": row["release_id"]})
-            if report["story_count"] != len(report["stories"]):
+            unique_stories = {(item["region"], item["story_key"]) for item in report["stories"]}
+            if report["story_count"] != len(unique_stories):
                 issues.append({"kind": "release_count", "release_id": row["release_id"]})
-            if sum(item["observation_count"] for item in report["stories"]) != report["eligible_observations"]:
+            topic_contributions = report.get("topic_contribution_count", len(report["stories"]))
+            if len(report["stories"]) != topic_contributions:
+                issues.append({"kind": "topic_reconciliation", "release_id": row["release_id"]})
+            eligible_topic_units = report.get("eligible_topic_units",
+                                              sum(item["observation_count"]
+                                                  for item in report["stories"]))
+            if sum(item["observation_count"] for item in report["stories"]) != eligible_topic_units:
                 issues.append({"kind": "eligible_reconciliation", "release_id": row["release_id"]})
+            expected_multi = report.get(
+                "multi_topic_story_count",
+                sum(1 for count in Counter((item["region"], item["story_key"])
+                                           for item in report["stories"]).values() if count > 1))
+            if expected_multi != sum(
+                    1 for count in Counter((item["region"], item["story_key"])
+                                           for item in report["stories"]).values() if count > 1):
+                issues.append({"kind": "multi_topic_reconciliation", "release_id": row["release_id"]})
         for row in self.store.all("SELECT * FROM collection_frames"):
             members = self.store.all("SELECT origin,external_id,revision FROM frame_members WHERE frame_id=?",
                                      (row["frame_id"],))

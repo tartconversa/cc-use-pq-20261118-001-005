@@ -21,20 +21,35 @@ class ReviewDiagnostics:
             data = item["data"]
             state = row["state"]
             category = self.analytics._classify(row, spec)
-            if category not in {"uncoded", "disputed", "retracted"}:
+            if category not in {"uncoded", "disputed", "eligible", "retracted"}:
                 continue
             if category == "retracted" and not include_retracted:
                 continue
+            open_topics = [{"topic": entry["topic"], "status": entry["status"],
+                            "reviewers": entry["reviewers"]}
+                           for entry in state["topics"].values()
+                           if entry["status"] in {"awaiting_review", "disputed"}]
+            if category == "eligible" and not open_topics:
+                continue
+            # 观察级状态：仍有议题争议记 disputed，否则记未编码；已确认议题同时可见。
+            status = "disputed" if any(topic["status"] == "disputed" for topic in open_topics) \
+                else "retracted" if category == "retracted" else "uncoded"
             pending.append({"origin": data["origin"], "external_id": data["external_id"],
                             "revision": item["revision"], "source_id": data["source_id"],
                             "region": row["source"]["region"], "published_at": data["published_at"],
-                            "status": category, "reviewers": [decision["reviewer"] for decision in state["decisions"]],
-                            "story_key": data["story_key"]})
+                            "status": status, "reviewers": [decision["reviewer"] for decision in state["decisions"]],
+                            "story_key": data["story_key"],
+                            "open_topics": open_topics,
+                            "confirmed_topics": state["confirmed_topics"],
+                            "pending_topics": state["pending_topics"]})
         order = {"disputed": 0, "uncoded": 1, "retracted": 2}
         pending.sort(key=lambda row: (order[row["status"]], row["published_at"],
                                       row["origin"], row["external_id"]))
         totals = Counter(row["status"] for row in pending)
+        topic_totals = Counter(topic["status"] for row in pending for topic in row["open_topics"])
         return {"query": spec, "total": len(pending), "by_status": dict(sorted(totals.items())),
+                "open_topic_count": sum(topic_totals.values()),
+                "open_topics_by_status": dict(sorted(topic_totals.items())),
                 "items": pending}
 
     def observation_explanation(self, origin, external_id, query):
@@ -68,13 +83,12 @@ class ReviewDiagnostics:
         rows = self.analytics._rows(spec)
         grouped = defaultdict(list)
         for row in rows:
-            if self.analytics._classify(row, spec) != "eligible":
-                continue
-            data = row["item"]["data"]
-            coding = row["state"]["coding"]
-            key = (row["source"]["region"], data["story_key"], coding["topic"], coding["audience"])
-            grouped[key].append({"origin": data["origin"], "external_id": data["external_id"],
-                                 "source_id": data["source_id"], "stance": coding["stance"]})
+            for unit in self.analytics._topic_units(row, spec):
+                data = row["item"]["data"]
+                key = (row["source"]["region"], data["story_key"], unit["topic"], unit["audience"])
+                grouped[key].append({"origin": data["origin"], "external_id": data["external_id"],
+                                     "source_id": data["source_id"], "stance": unit["stance"],
+                                     "topic_status": unit["topic_status"]})
         conflicts = []
         for key, items in sorted(grouped.items()):
             if len({item["stance"] for item in items}) > 1:
@@ -94,10 +108,15 @@ class ReviewDiagnostics:
             warnings.append("collection_coverage")
         if conflicts["count"]:
             warnings.append("story_coding_conflicts")
-        if queue["by_status"].get("disputed", 0):
+        if queue["by_status"].get("disputed", 0) or report.get("disputed_topic_count"):
             warnings.append("unresolved_decisions")
+        if report.get("awaiting_topic_count"):
+            warnings.append("open_topic_reviews")
         return {"query_hash": report["query_hash"], "event_head": report["event_head"],
                 "quality": quality, "coverage": coverage, "queue": queue["by_status"],
+                "open_topic_count": queue["open_topic_count"],
+                "awaiting_topic_count": report.get("awaiting_topic_count", 0),
+                "disputed_topic_count": report.get("disputed_topic_count", 0),
                 "story_conflicts": conflicts["count"], "warnings": warnings,
                 "ready": quality["passed"] and not warnings}
 
